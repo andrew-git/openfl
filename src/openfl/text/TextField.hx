@@ -10,6 +10,7 @@ import lime.ui.MouseCursor;
 import lime.utils.Log;
 import openfl._internal.renderer.cairo.CairoTextField;
 import openfl._internal.renderer.canvas.CanvasTextField;
+import openfl._internal.renderer.canvas.CanvasSmoothing;
 import openfl._internal.renderer.dom.DOMBitmap;
 import openfl._internal.renderer.dom.DOMTextField;
 import openfl._internal.renderer.opengl.GLRenderer;
@@ -31,7 +32,6 @@ import openfl.events.FocusEvent;
 import openfl.events.KeyboardEvent;
 import openfl.events.MouseEvent;
 import openfl.events.TextEvent;
-import openfl.filters.GlowFilter;
 import openfl.geom.Matrix;
 import openfl.geom.Rectangle;
 import openfl.net.URLRequest;
@@ -95,6 +95,7 @@ class TextField extends InteractiveObject implements IShaderDrawable {
 	public var type (get, set):TextFieldType;
 	public var wordWrap (get, set):Bool;
 	
+	private var __anchor:Float = 0;
 	private var __bounds:Rectangle;
 	private var __caretIndex:Int;
 	private var __cursorTimer:Timer;
@@ -113,12 +114,12 @@ class TextField extends InteractiveObject implements IShaderDrawable {
 	private var __htmlText:UTF8String;
 	private var __textEngine:TextEngine;
 	private var __textFormat:TextFormat;
+	private var __forceCachedBitmapUpdate:Bool = false;
 	
 	#if (js && html5)
 	private var __div:DivElement;
 	private var __renderedOnCanvasWhileOnDOM:Bool = false;
 	private var __rawHtmlText:String;
-	private var __forceCachedBitmapUpdate:Bool = false;
 	#end
 	
 	
@@ -210,7 +211,7 @@ class TextField extends InteractiveObject implements IShaderDrawable {
 		__updateText (__text + text);
 		
 		__textEngine.textFormatRanges[__textEngine.textFormatRanges.length - 1].end = __text.length;
-		__updateScrollH ();
+		__updateScrollHV (__caretIndex);
 		
 	}
 	
@@ -618,7 +619,10 @@ class TextField extends InteractiveObject implements IShaderDrawable {
 			
 		}
 		
-		__updateScrollH ();
+		var caretIndex = beginIndex + cast (newText, UTF8String).length;
+		if (caretIndex > __text.length) caretIndex = __text.length;
+		
+		__updateScrollHV (caretIndex);
 		
 		__dirty = true;
 		__layoutDirty = true;
@@ -1153,6 +1157,28 @@ class TextField extends InteractiveObject implements IShaderDrawable {
 	}
 	
 	
+	private inline function __getAnchorFromX ():Float {
+		
+		return __transform.tx + __textEngine.width * __getAutoSizeFactor ();
+		
+	}
+	
+	
+	private inline function __getAutoSizeFactor ():Float {
+		
+		return  switch (__textEngine.autoSize) {
+					
+					case RIGHT: 1;
+					
+					case CENTER: 0.5;
+					
+					default: 0;
+					
+				};
+				
+	}
+	
+	
 	private override function __getBounds (rect:Rectangle, matrix:Matrix):Void {
 		
 		__updateLayout ();
@@ -1176,7 +1202,7 @@ class TextField extends InteractiveObject implements IShaderDrawable {
 		if (lineIndex < 0 || lineIndex > __textEngine.numLines - 1) return -1;
 		
 		var x:Null<Float> = null, y:Null<Float> = null;
-		
+		var lineGroup = null;
 		for (group in __textEngine.layoutGroups) {
 			
 			if (charIndex >= group.startIndex && charIndex <= group.endIndex) {
@@ -1189,7 +1215,7 @@ class TextField extends InteractiveObject implements IShaderDrawable {
 					
 				}
 				
-				if (y != null) return __getPosition (x, y);
+				if (y != null) return __getPosition (x, y, lineGroup);
 				
 			}
 			
@@ -1197,7 +1223,9 @@ class TextField extends InteractiveObject implements IShaderDrawable {
 				
 				y = group.offsetY + group.height / 2;
 				
-				if (x != null) return __getPosition (x, y);
+				lineGroup = group;
+				
+				if (x != null) return __getPosition (x, y, lineGroup);
 				
 			}
 			
@@ -1283,9 +1311,9 @@ class TextField extends InteractiveObject implements IShaderDrawable {
 	}
 	
 	
-	private function __getPosition (x:Float, y:Float):Int {
+	private function __getPosition (x:Float, y:Float, group: TextLayoutGroup = null):Int {
 		
-		var group = __getGroup (x, y);
+		group = group == null ? __getGroup (x, y) : group;
 		
 		if (group == null) {
 			
@@ -1317,11 +1345,25 @@ class TextField extends InteractiveObject implements IShaderDrawable {
 		
 		return group.endIndex;
 	}
-	
-	
-	private override function __hitTest (x:Float, y:Float, shapeFlag:Bool, stack:Array<DisplayObject>, interactiveOnly:Bool, hitObject:DisplayObject):Bool {
+
+
+	private inline function __getXFromAnchor ():Float {
 		
-		if (!hitObject.visible || __isMask || (interactiveOnly && !mouseEnabled)) return false;
+		return __anchor - __textEngine.width * __getAutoSizeFactor ();
+		
+	}
+	
+	
+	private inline function __hasAnchor ():Bool {
+		
+		return !wordWrap && (__textEngine.autoSize == RIGHT || __textEngine.autoSize == CENTER);
+		
+	}
+	
+	
+	private override function __hitTest (x:Float, y:Float, shapeFlag:Bool, stack:Array<DisplayObject>, interactiveOnly:Bool, hitObject:DisplayObject, hitTestWhenMouseDisabled:Bool = false):Bool {
+		
+		if (!hitObject.visible || __isMask || (!hitTestWhenMouseDisabled && interactiveOnly && !mouseEnabled)) return false;
 		if (mask != null && !mask.__hitTestMask (x, y)) return false;
 		
 		__getRenderTransform ();
@@ -1332,7 +1374,7 @@ class TextField extends InteractiveObject implements IShaderDrawable {
 		
 		if (__textEngine.bounds.contains (px, py)) {
 			
-			if (stack != null) {
+			if (stack != null && !hitTestWhenMouseDisabled) {
 				
 				stack.push (hitObject);
 				
@@ -1369,6 +1411,7 @@ class TextField extends InteractiveObject implements IShaderDrawable {
 	private override function __renderCairo (renderSession:RenderSession):Void {
 		
 		#if lime_cairo
+		__forceCachedBitmapUpdate = __forceCachedBitmapUpdate || __dirty;
 		CairoTextField.render (this, renderSession, __worldTransform);
 		super.__renderCairo (renderSession);
 		#end
@@ -1382,7 +1425,7 @@ class TextField extends InteractiveObject implements IShaderDrawable {
 		
 		// TODO: Better DOM workaround on cacheAsBitmap
 		
-		if (renderSession.renderType == DOM && !__renderedOnCanvasWhileOnDOM) {
+		if (renderSession.renderType == DOM && (!__renderedOnCanvasWhileOnDOM  || __forceCachedBitmapUpdate)) {
 			
 			__renderedOnCanvasWhileOnDOM = true;
 			
@@ -1394,7 +1437,7 @@ class TextField extends InteractiveObject implements IShaderDrawable {
 			
 			if (__isHTML) {
 				
-				__updateText (HTMLParser.parse (__text, __textFormat, __textEngine.textFormatRanges));
+				__updateText (HTMLParser.parse(__rawHtmlText, __textFormat, __textEngine.textFormatRanges));
 				
 			}
 			
@@ -1403,32 +1446,17 @@ class TextField extends InteractiveObject implements IShaderDrawable {
 			__setRenderDirty ();
 			
 		}
+		__forceCachedBitmapUpdate = __forceCachedBitmapUpdate || __dirty;
 		
 		CanvasTextField.render (this, renderSession, __worldTransform);
 		
 		if (__textEngine.antiAliasType == ADVANCED && __textEngine.gridFitType == PIXEL) {
 			
-			var smoothingEnabled = untyped (renderSession.context).imageSmoothingEnabled;
-			
-			if (smoothingEnabled) {
-				
-				untyped (renderSession.context).mozImageSmoothingEnabled = false;
-				//untyped (renderSession.context).webkitImageSmoothingEnabled = false;
-				untyped (renderSession.context).msImageSmoothingEnabled = false;
-				untyped (renderSession.context).imageSmoothingEnabled = false;
-				
-			}
+			CanvasSmoothing.setEnabled(renderSession.context, false);
 			
 			super.__renderCanvas (renderSession);
 			
-			if (smoothingEnabled) {
-				
-				untyped (renderSession.context).mozImageSmoothingEnabled = true;
-				//untyped (renderSession.context).webkitImageSmoothingEnabled = true;
-				untyped (renderSession.context).msImageSmoothingEnabled = true;
-				untyped (renderSession.context).imageSmoothingEnabled = true;
-				
-			}
+			CanvasSmoothing.setEnabled(renderSession.context, true);
 			
 		} else {
 			
@@ -1445,8 +1473,7 @@ class TextField extends InteractiveObject implements IShaderDrawable {
 		
 		#if (js && html5)
 		
-		__updateCacheBitmap (renderSession, __forceCachedBitmapUpdate || !__worldColorTransform.__isDefault ());
-		__forceCachedBitmapUpdate = false;
+		__updateCacheBitmap (renderSession, !__worldColorTransform.__isDefault ());
 		if (__cacheBitmap != null && !__cacheBitmapRender) {
 			
 			__renderDOMClear (renderSession);
@@ -1462,7 +1489,7 @@ class TextField extends InteractiveObject implements IShaderDrawable {
 				
 				if (__isHTML && __rawHtmlText != null) {
 					
-					__updateText (__rawHtmlText);
+					__updateText (__text);
 					__dirty = true;
 					__layoutDirty = true;
 					__setRenderDirty ();
@@ -1489,6 +1516,7 @@ class TextField extends InteractiveObject implements IShaderDrawable {
 	
 	private override function __renderGL (renderSession:RenderSession):Void {
 		
+		__forceCachedBitmapUpdate = __forceCachedBitmapUpdate || __dirty;
 		#if (js && html5)
 		CanvasTextField.render (this, renderSession, __worldTransform);
 		#elseif lime_cairo
@@ -1578,7 +1606,10 @@ class TextField extends InteractiveObject implements IShaderDrawable {
 	
 	private override function __updateCacheBitmap (renderSession:RenderSession, force:Bool):Bool {
 		
-		if (super.__updateCacheBitmap (renderSession, force)) {
+		var success = super.__updateCacheBitmap (renderSession, __forceCachedBitmapUpdate || force);
+		__forceCachedBitmapUpdate = false;
+		
+		if (success) {
 			
 			if (__cacheBitmap != null) {
 				
@@ -1600,32 +1631,11 @@ class TextField extends InteractiveObject implements IShaderDrawable {
 		
 		if (__layoutDirty) {
 			
-			var cacheWidth = __textEngine.width;
-			var cacheHeight = __textEngine.height;
-			
 			__textEngine.update ();
 			
 			if (__textEngine.autoSize != NONE) {
 				
-				if (__textEngine.width != cacheWidth) {
-					
-					switch (__textEngine.autoSize) {
-						
-						case RIGHT:
-							
-							x += cacheWidth - __textEngine.width;
-						
-						case CENTER:
-							
-							x += (cacheWidth - __textEngine.width) / 2;
-						
-						default:
-							
-						
-					}
-					
-					
-				}
+				if (__hasAnchor ()) __updateXFromAnchor ();
 				
 				__textEngine.getBounds ();
 				
@@ -1638,22 +1648,45 @@ class TextField extends InteractiveObject implements IShaderDrawable {
 	}
 	
 	
-	private function __updateScrollH ():Void {
+	private function __updateScrollHV (caretIndex: Int):Void {
 		
-		if (!multiline && type == INPUT) {
+		if (type == INPUT) {
 			
-			__layoutDirty = true;
-			__updateLayout ();
-			
-			var offsetX = __textEngine.textWidth - __textEngine.width + 4;
-			
-			if (offsetX > 0) {
+			if (!multiline ) {
 				
-				scrollH = Math.ceil (offsetX);
+				__layoutDirty = true;
+				__updateLayout ();
+				
+				var offsetX = __textEngine.textWidth - __textEngine.width + 4;
+				
+				if (offsetX > 0) {
+					
+					scrollH = Math.ceil (offsetX);
+					
+				} else {
+					
+					scrollH = 0;
+					
+				}
 				
 			} else {
 				
-				scrollH = 0;
+				var currentNumLines = __textEngine.numLines;
+				__layoutDirty = true;
+				__updateLayout ();
+				
+				if (currentNumLines != __textEngine.numLines) {
+					
+					var lineIndex = getLineIndexOfChar (caretIndex);
+					var lineScrollV = lineIndex - __textEngine.bottomScrollV + 2;
+					
+					if (lineScrollV > __textEngine.scrollV) {
+						
+						scrollV = lineScrollV;
+						
+					}
+					
+				}
 				
 			}
 			
@@ -1713,6 +1746,19 @@ class TextField extends InteractiveObject implements IShaderDrawable {
 	}
 	
 	
+	private function __updateXFromAnchor ():Void {
+		
+		var value = __getXFromAnchor ();
+		if (value != __transform.tx) {
+			
+			__transform.tx = value;
+			__setTransformDirty ();
+			
+		}
+		
+	}
+	
+	
 	
 	
 	// Getters & Setters
@@ -1751,13 +1797,21 @@ class TextField extends InteractiveObject implements IShaderDrawable {
 		
 		if (value != __textEngine.autoSize) {
 			
-			__dirty = true;
+			__textEngine.autoSize = value;
+			
+			if (__hasAnchor ())  {
+				
+				__anchor = __getAnchorFromX ();
+				
+			}
+			
 			__layoutDirty = true;
+			__dirty = true;
 			__setRenderDirty ();
 			
 		}
 		
-		return __textEngine.autoSize = value;
+		return value;
 		
 	}
 	
@@ -1851,15 +1905,6 @@ class TextField extends InteractiveObject implements IShaderDrawable {
 		__updateLayout ();
 		
 		return __textEngine.bottomScrollV;
-		
-	}
-	
-	
-	private override function get_cacheAsBitmap ():Bool {
-		
-		// HACK
-		if (__filters != null && __filters.length == 1 && Std.is (__filters[0], GlowFilter)) return false;
-		return super.get_cacheAsBitmap ();
 		
 	}
 	
@@ -1977,6 +2022,14 @@ class TextField extends InteractiveObject implements IShaderDrawable {
 			
 			__textEngine.height = value;
 			
+			#if (js && html5)
+			if (DisplayObject.__supportDOM && __renderedOnCanvasWhileOnDOM) {
+				
+				__forceCachedBitmapUpdate = true;
+				
+			}
+			#end
+			
 		}
 		
 		return __textEngine.height * Math.abs (scaleY);
@@ -1986,7 +2039,11 @@ class TextField extends InteractiveObject implements IShaderDrawable {
 	
 	private function get_htmlText ():String {
 		
+		#if (js && html5)
+		return __isHTML ? __rawHtmlText : __text;
+		#else
 		return __text;
+		#end
 		
 	}
 	
@@ -2004,49 +2061,12 @@ class TextField extends InteractiveObject implements IShaderDrawable {
 		__isHTML = true;
 		
 		#if (js && html5)
-		if (DisplayObject.__supportDOM) {
-			
-			__rawHtmlText = value;
-			
-		}
+		__rawHtmlText = value;
 		#end
 		
 		value = HTMLParser.parse(value, __textFormat, __textEngine.textFormatRanges);
 		
-		#if (js && html5)
-		
-		if (DisplayObject.__supportDOM) {
-			
-			if (__textEngine.textFormatRanges.length > 1) {
-				
-				__textEngine.textFormatRanges.splice (1, __textEngine.textFormatRanges.length - 1);
-				
-			}
-			
-			var range = __textEngine.textFormatRanges[0];
-			range.format = __textFormat;
-			range.start = 0;
-			
-			if (__renderedOnCanvasWhileOnDOM) {
-				
-				range.end = value.length;
-				__updateText (value);
-				
-			} else {
-				
-				range.end = __rawHtmlText.length;
-				__updateText (__rawHtmlText);
-				
-			}
-			
-		} else {
-			
-			__updateText (value);
-			
-		}
-		#else
 		__updateText (value);
-		#end
 		
 		return value;
 		
@@ -2136,7 +2156,7 @@ class TextField extends InteractiveObject implements IShaderDrawable {
 			__dirty = true;
 			__layoutDirty = true;
 			__updateText (__text);
-			__updateScrollH ();
+			__updateScrollHV (__caretIndex);
 			__setRenderDirty ();
 			
 		}
@@ -2221,7 +2241,7 @@ class TextField extends InteractiveObject implements IShaderDrawable {
 			
 			__dirty = true;
 			__setRenderDirty ();
-			dispatchEvent(new Event(Event.SCROLL));
+			dispatchEvent (new Event (Event.SCROLL));
 			
 		}
 		
@@ -2356,6 +2376,14 @@ class TextField extends InteractiveObject implements IShaderDrawable {
 			__dirty = true;
 			__setRenderDirty ();
 			
+			#if (js && html5)
+			if (DisplayObject.__supportDOM && __renderedOnCanvasWhileOnDOM) {
+				
+				__forceCachedBitmapUpdate = true;
+				
+			}
+			#end
+			
 		}
 		
 		for (range in __textEngine.textFormatRanges) {
@@ -2435,11 +2463,28 @@ class TextField extends InteractiveObject implements IShaderDrawable {
 			
 			__setTransformDirty ();
 			__dirty = true;
-			__layoutDirty = true;
 			__setRenderDirty ();
 			
 			__textEngine.width = value;
 			
+			if (__hasAnchor () && __textEngine.text != null)  {
+				
+				if (__layoutDirty) __textEngine.update ();
+				
+				__anchor = __getXFromAnchor () + value * __getAutoSizeFactor ();
+				
+			} 
+			
+			__layoutDirty = true;
+			
+			
+			#if (js && html5)
+			if (DisplayObject.__supportDOM && __renderedOnCanvasWhileOnDOM) {
+				
+				__forceCachedBitmapUpdate = true;
+				
+			}
+			#end
 		}
 		
 		return __textEngine.width * Math.abs (__scaleX);
@@ -2462,6 +2507,14 @@ class TextField extends InteractiveObject implements IShaderDrawable {
 			__layoutDirty = true;
 			__setRenderDirty ();
 			
+			#if (js && html5)
+			if (DisplayObject.__supportDOM && __renderedOnCanvasWhileOnDOM) {
+				
+				__forceCachedBitmapUpdate = true;
+				
+			}
+			#end
+			
 		}
 		
 		return __textEngine.wordWrap = value;
@@ -2471,6 +2524,14 @@ class TextField extends InteractiveObject implements IShaderDrawable {
 	
 	private override function get_x ():Float {
 		
+		if (__hasAnchor ()) {
+			
+			if (__layoutDirty) __textEngine.update ();
+				
+			return __getXFromAnchor () + __offsetX;
+			
+		}
+		
 		return __transform.tx + __offsetX;
 		
 	}
@@ -2479,7 +2540,25 @@ class TextField extends InteractiveObject implements IShaderDrawable {
 	private override function set_x (value:Float):Float {
 		
 		if (value != __transform.tx + __offsetX) __setTransformDirty ();
-		return __transform.tx = value - __offsetX;
+		__transform.tx = value - __offsetX;
+		
+		if (__hasAnchor ()) {
+			
+			if (__textEngine.autoSize == CENTER) {
+				
+				if (__layoutDirty) __textEngine.update ();
+				
+				__anchor = __getAnchorFromX ();
+				
+			} else {
+				
+				__anchor = __transform.tx;
+				
+			}
+			
+		}
+		
+		return __transform.tx;
 		
 	}
 	
@@ -2671,6 +2750,9 @@ class TextField extends InteractiveObject implements IShaderDrawable {
 	
 	private function window_onKeyDown (key:KeyCode, modifier:KeyModifier):Void {
 		
+		var currentCaretIndex = __caretIndex;
+		var currentNumLines = __textEngine.numLines;
+		
 		switch (key) {
 			
 			case RETURN, NUMPAD_ENTER:
@@ -2695,6 +2777,12 @@ class TextField extends InteractiveObject implements IShaderDrawable {
 					replaceSelectedText ("");
 					__selectionIndex = __caretIndex;
 					
+					if (type == INPUT && multiline && currentNumLines != __textEngine.numLines) {
+						
+						scrollV -= (currentNumLines - __textEngine.numLines);
+						
+					}
+					
 					dispatchEvent (new Event (Event.CHANGE, true));
 					
 				}
@@ -2711,6 +2799,12 @@ class TextField extends InteractiveObject implements IShaderDrawable {
 					
 					replaceSelectedText ("");
 					__selectionIndex = __caretIndex;
+					
+					if (type == INPUT && multiline && currentNumLines != __textEngine.numLines && __textEngine.scrollV > __textEngine.maxScrollV) {
+						
+						scrollV = __textEngine.maxScrollV;
+						
+					}
 					
 					dispatchEvent (new Event (Event.CHANGE, true));
 					
@@ -2809,6 +2903,18 @@ class TextField extends InteractiveObject implements IShaderDrawable {
 					
 				}
 				
+				if (type == INPUT && multiline) {
+					
+					var currentLineIndex = getLineIndexOfChar (currentCaretIndex);
+					var newLineIndex = getLineIndexOfChar (__caretIndex);
+					if (newLineIndex != currentLineIndex && newLineIndex >= __textEngine.scrollV + __textEngine.bottomScrollV - 1) {
+						
+						scrollV += (newLineIndex - currentLineIndex);
+						
+					}
+					
+				}
+				
 				__stopCursorTimer ();
 				__startCursorTimer ();
 			
@@ -2832,6 +2938,18 @@ class TextField extends InteractiveObject implements IShaderDrawable {
 					}
 					
 					__selectionIndex = __caretIndex;
+					
+				}
+				
+				if (type == INPUT && multiline) {
+					
+					var currentLineIndex = getLineIndexOfChar (currentCaretIndex);
+					var newLineIndex = getLineIndexOfChar (__caretIndex);
+					if (newLineIndex != currentLineIndex && newLineIndex < __textEngine.scrollV - 1) {
+						
+						scrollV += (newLineIndex - currentLineIndex);
+						
+					}
 					
 				}
 				

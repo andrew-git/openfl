@@ -1,6 +1,7 @@
 package openfl._internal.renderer.opengl;
 
 
+import openfl._internal.renderer.canvas.CanvasRenderer;
 import lime.graphics.GLRenderContext;
 import lime.graphics.opengl.GLFramebuffer;
 import lime.math.Matrix4;
@@ -15,6 +16,7 @@ import openfl.geom.Matrix;
 @:noDebug
 #end
 
+@:access(openfl._internal.renderer.canvas.CanvasRenderer)
 @:access(openfl.display.BitmapData)
 @:access(openfl.display.Graphics)
 @:access(openfl.display.Stage)
@@ -70,6 +72,9 @@ class GLRenderer extends AbstractRenderer {
 		//renderSession.roundPixels = true;
 		renderSession.renderer = this;
 		renderSession.renderType = OPENGL;
+		#if (js && html5)
+		renderSession.pixelRatio = stage.window.scale;
+		#end
 		renderSession.blendModeManager = new GLBlendModeManager (gl);
 		renderSession.filterManager = new GLFilterManager (this, renderSession);
 		renderSession.shaderManager = new GLShaderManager (gl);
@@ -122,13 +127,13 @@ class GLRenderer extends AbstractRenderer {
 	}
 	
 	
-	public function getMatrix (transform:Matrix):Array<Float> {
+	public function getMatrix (transform:Matrix, snapToPixel: Bool = false):Array<Float> {
 		
 		var _matrix = Matrix.__pool.get ();
 		_matrix.copyFrom (transform);
 		_matrix.concat (displayMatrix);
 		
-		if (renderSession.roundPixels) {
+		if (renderSession.roundPixels || snapToPixel) {
 			
 			_matrix.tx = Math.round (_matrix.tx);
 			_matrix.ty = Math.round (_matrix.ty);
@@ -216,7 +221,7 @@ class GLRenderer extends AbstractRenderer {
 		gl.viewport (offsetX, offsetY, displayWidth, displayHeight);
 		
 		renderSession.allowSmoothing = (stage.quality != LOW);
-		renderSession.upscaled = (displayMatrix.a != 1 || displayMatrix.d != 1);
+		renderSession.forceSmoothing = #if always_smooth_on_upscale (displayMatrix.a != 1 || displayMatrix.d != 1); #else false; #end
 		
 		stage.__renderGL (renderSession);
 		

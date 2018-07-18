@@ -43,12 +43,16 @@ class GLBitmap {
 			renderSession.shaderManager.setShader (shader);
 			
 			shader.data.uImage0.input = bitmap.__bitmapData;
-			shader.data.uImage0.smoothing = renderSession.allowSmoothing && (bitmap.smoothing || renderSession.upscaled);
-			shader.data.uMatrix.value = renderer.getMatrix (bitmap.__renderTransform);
+			shader.data.uImage0.smoothing = renderSession.allowSmoothing && (bitmap.smoothing || renderSession.forceSmoothing);
+			shader.data.uMatrix.value = renderer.getMatrix (bitmap.__renderTransform, bitmap.__snapToPixel());
 			
 			var useColorTransform = !bitmap.__worldColorTransform.__isDefault ();
 			if (shader.data.uColorTransform.value == null) shader.data.uColorTransform.value = [];
 			shader.data.uColorTransform.value[0] = useColorTransform;
+			
+			var vaoRendered = GLVAORenderHelper.renderDO (bitmap, renderSession, shader, bitmap.__bitmapData);
+			
+			if (vaoRendered) return;
 			
 			renderSession.shaderManager.updateShader (shader);
 			
@@ -93,8 +97,12 @@ class GLBitmap {
 			renderSession.shaderManager.setShader (shader);
 			
 			shader.data.uImage0.input = bitmap.__bitmapData;
-			shader.data.uImage0.smoothing = renderSession.allowSmoothing && (bitmap.smoothing || renderSession.upscaled);
-			shader.data.uMatrix.value = renderer.getMatrix (bitmap.__renderTransform);
+			shader.data.uImage0.smoothing = renderSession.allowSmoothing && (bitmap.smoothing || renderSession.forceSmoothing);
+			shader.data.uMatrix.value = renderer.getMatrix (bitmap.__renderTransform, bitmap.__snapToPixel());
+			
+			var vaoRendered = GLVAORenderHelper.renderMask (bitmap, renderSession, shader, bitmap.__bitmapData);
+			
+			if (vaoRendered) return;
 			
 			renderSession.shaderManager.updateShader (shader);
 			

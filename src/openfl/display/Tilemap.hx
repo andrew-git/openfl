@@ -42,6 +42,7 @@ class Tilemap extends #if !flash DisplayObject #else Bitmap implements IDisplayO
 	public var tileset (get, set):Tileset;
 	
 	#if !flash
+	public var pixelSnapping (get, set):PixelSnapping;
 	public var smoothing:Bool;
 	#end
 	
@@ -65,11 +66,15 @@ class Tilemap extends #if !flash DisplayObject #else Bitmap implements IDisplayO
 	#end
 	
 	
-	public function new (width:Int, height:Int, tileset:Tileset = null, smoothing:Bool = true) {
+	public function new (width:Int, height:Int, tileset:Tileset = null, pixelSnapping:PixelSnapping = null, smoothing:Bool = true) {
 		
 		super ();
 		
 		__tileset = tileset;
+
+		if (pixelSnapping == null) pixelSnapping = PixelSnapping.AUTO;
+		__pixelSnapping = pixelSnapping;
+
 		this.smoothing = smoothing;
 		
 		__tiles = new Vector ();
@@ -80,7 +85,6 @@ class Tilemap extends #if !flash DisplayObject #else Bitmap implements IDisplayO
 		__height = height;
 		#else
 		bitmapData = new BitmapData (width, height, true, 0);
-		this.smoothing = smoothing;
 		FlashRenderer.register (this);
 		#end
 		
@@ -98,8 +102,8 @@ class Tilemap extends #if !flash DisplayObject #else Bitmap implements IDisplayO
 		}
 		
 		__tiles[numTiles] = tile;
-		tile.parent = this;
 		numTiles++;
+		tile.parent = this;
 		#if !flash
 		__setRenderDirty ();
 		#end
@@ -302,7 +306,7 @@ class Tilemap extends #if !flash DisplayObject #else Bitmap implements IDisplayO
 	
 	
 	#if !flash
-	private override function __hitTest (x:Float, y:Float, shapeFlag:Bool, stack:Array<DisplayObject>, interactiveOnly:Bool, hitObject:DisplayObject):Bool {
+	private override function __hitTest (x:Float, y:Float, shapeFlag:Bool, stack:Array<DisplayObject>, interactiveOnly:Bool, hitObject:DisplayObject, hitTestWhenMouseDisabled:Bool = false):Bool {
 		
 		if (!hitObject.visible || __isMask) return false;
 		if (mask != null && !mask.__hitTestMask (x, y)) return false;
@@ -314,7 +318,7 @@ class Tilemap extends #if !flash DisplayObject #else Bitmap implements IDisplayO
 		
 		if (px > 0 && py > 0 && px <= __width && py <= __height) {
 			
-			if (stack != null && !interactiveOnly) {
+			if (stack != null && !interactiveOnly && !hitTestWhenMouseDisabled) {
 				stack.push (hitObject);
 			}
 			
@@ -444,7 +448,7 @@ class Tilemap extends #if !flash DisplayObject #else Bitmap implements IDisplayO
 	#if !flash
 	private override function __updateCacheBitmap (renderSession:RenderSession, force:Bool):Bool {
 		
-		if (filters == null) return false;
+		if (!__hasFilters ()) return false;
 		return super.__updateCacheBitmap (renderSession, force);
 		
 	}

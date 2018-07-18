@@ -12,6 +12,7 @@ import lime.graphics.cairo.Cairo;
 import lime.graphics.opengl.GLBuffer;
 import lime.graphics.opengl.GLFramebuffer;
 import lime.graphics.opengl.GLTexture;
+import lime.graphics.opengl.GLVertexArrayObject;
 import lime.graphics.opengl.GL;
 import lime.graphics.opengl.WebGLContext;
 import lime.graphics.GLRenderContext;
@@ -28,9 +29,11 @@ import lime.utils.UInt8Array;
 // import openfl.Lib;
 import openfl._internal.renderer.canvas.CanvasBlendModeManager;
 import openfl._internal.renderer.canvas.CanvasMaskManager;
+import openfl._internal.renderer.canvas.CanvasSmoothing;
 import openfl._internal.renderer.RenderSession;
 import openfl._internal.renderer.opengl.GLMaskManager;
 import openfl._internal.renderer.opengl.GLRenderer;
+import openfl._internal.renderer.opengl.vao.IVertexArrayObjectContext;
 import openfl._internal.utils.PerlinNoise;
 import openfl.display3D.textures.TextureBase;
 import openfl.errors.Error;
@@ -115,15 +118,20 @@ class BitmapData implements IBitmapDrawable {
 	private var __isMask:Bool;
 	private var __isValid:Bool;
 	private var __renderable:Bool;
+	private var __pixelRatio:Float = 1.0;
 	private var __surface:CairoSurface;
 	private var __texture:GLTexture;
 	private var __textureContext:GLRenderContext;
 	private var __textureVersion:Int;
+	private var __ownsTexture:Bool;
 	private var __transform:Matrix;
 	private var __worldAlpha:Float;
 	private var __worldColorTransform:ColorTransform;
 	private var __worldTransform:Matrix;
 	
+	private var __vao:GLVertexArrayObject;
+	private var __vaoMask:GLVertexArrayObject;
+	private var __vaoContext: IVertexArrayObjectContext;
 	
 	public function new (width:Int, height:Int, transparent:Bool = true, fillColor:UInt = 0xFFFFFFFF) {
 		
@@ -199,6 +207,7 @@ class BitmapData implements IBitmapDrawable {
 		__worldTransform = new Matrix ();
 		__worldColorTransform = new ColorTransform ();
 		__renderable = true;
+		__ownsTexture = false;
 		
 	}
 	
@@ -409,7 +418,7 @@ class BitmapData implements IBitmapDrawable {
 	
 	public function copyPixels (sourceBitmapData:BitmapData, sourceRect:Rectangle, destPoint:Point, alphaBitmapData:BitmapData = null, alphaPoint:Point = null, mergeAlpha:Bool = false):Void {
 		
-		if (!readable || sourceBitmapData == null) return;
+		if (!readable || sourceBitmapData == null || !sourceBitmapData.__prepareImage()) return;
 		
 		if (alphaPoint != null) {
 			
@@ -436,11 +445,21 @@ class BitmapData implements IBitmapDrawable {
 		
 		__surface = null;
 		
-		__buffer = null;
+		if (__buffer != null) {
+			__bufferContext.deleteBuffer (__buffer);
+			__buffer = null;
+			__bufferContext = null;
+		}
+		
 		__framebuffer = null;
 		__framebufferContext = null;
-		__texture = null;
-		__textureContext = null;
+		
+		if (__ownsTexture) {
+			__ownsTexture = false;
+			__textureContext.deleteTexture (__texture);
+			__texture = null;
+			__textureContext = null;
+		}
 		
 		//if (__texture != null) {
 			//
@@ -503,11 +522,13 @@ class BitmapData implements IBitmapDrawable {
 				renderSession.clearRenderDirty = false;
 				renderSession.shaderManager = cast (null, GLRenderer).renderSession.shaderManager;
 				
-				var matrixCache = source.__worldTransform;
+				var matrixCache = Matrix.__pool.get ();
+				matrixCache.copyFrom (source.__worldTransform);
 				source.__updateTransforms (matrix);
 				source.__updateChildren (false);
 				source.__renderGL (renderer.renderSession);
 				source.__updateTransforms (matrixCache);
+				Matrix.__pool.release (matrixCache);
 				source.__updateChildren (true);
 				
 				gl.bindFramebuffer (gl.FRAMEBUFFER, null);
@@ -548,19 +569,15 @@ class BitmapData implements IBitmapDrawable {
 			renderSession.clearRenderDirty = false;
 			renderSession.context = cast buffer.__srcContext;
 			renderSession.allowSmoothing = smoothing;
+			renderSession.pixelRatio = __pixelRatio;
 			//renderSession.roundPixels = true;
 			renderSession.maskManager = new CanvasMaskManager (renderSession);
 			renderSession.blendModeManager = new CanvasBlendModeManager (renderSession);
 			renderSession.blendModeManager.setBlendMode(blendMode);
 			
-			if (!smoothing) {
-				
-				untyped (buffer.__srcContext).mozImageSmoothingEnabled = false;
-				//untyped (buffer.__srcContext).webkitImageSmoothingEnabled = false;
-				untyped (buffer.__srcContext).msImageSmoothingEnabled = false;
-				untyped (buffer.__srcContext).imageSmoothingEnabled = false;
-				
-			}
+			buffer.__srcContext.save();
+
+			CanvasSmoothing.setEnabled(buffer.__srcContext, smoothing);
 			
 			if (clipRect != null) {
 				
@@ -568,21 +585,16 @@ class BitmapData implements IBitmapDrawable {
 				
 			}
 			
-			var matrixCache = source.__worldTransform;
+			var matrixCache = Matrix.__pool.get ();
+			matrixCache.copyFrom (source.__worldTransform);
 			source.__updateTransforms (matrix);
 			source.__updateChildren (false);
 			source.__renderCanvas (renderSession);
 			source.__updateTransforms (matrixCache);
+			Matrix.__pool.release (matrixCache);
 			source.__updateChildren (true);
 			
-			if (!smoothing) {
-				
-				untyped (buffer.__srcContext).mozImageSmoothingEnabled = true;
-				//untyped (buffer.__srcContext).webkitImageSmoothingEnabled = true;
-				untyped (buffer.__srcContext).msImageSmoothingEnabled = true;
-				untyped (buffer.__srcContext).imageSmoothingEnabled = true;
-				
-			}
+			buffer.__srcContext.restore();
 			
 			if (clipRect != null) {
 				
@@ -590,7 +602,6 @@ class BitmapData implements IBitmapDrawable {
 				
 			}
 			
-			buffer.__srcContext.setTransform (1, 0, 0, 1, 0, 0);
 			buffer.__srcImageData = null;
 			buffer.data = null;
 			
@@ -640,6 +651,7 @@ class BitmapData implements IBitmapDrawable {
 			renderSession.clearRenderDirty = false;
 			renderSession.cairo = cairo;
 			renderSession.allowSmoothing = smoothing;
+			renderSession.pixelRatio = __pixelRatio;
 			//renderSession.roundPixels = true;
 			renderSession.maskManager = new CairoMaskManager (renderSession);
 			renderSession.blendModeManager = new CairoBlendModeManager (renderSession);
@@ -651,11 +663,13 @@ class BitmapData implements IBitmapDrawable {
 				
 			}
 			
-			var matrixCache = source.__worldTransform;
+			var matrixCache = Matrix.__pool.get ();
+			matrixCache.copyFrom (source.__worldTransform);
 			source.__updateTransforms (matrix);
 			source.__updateChildren (false);
 			source.__renderCairo (renderSession);
 			source.__updateTransforms (matrixCache);
+			Matrix.__pool.release (matrixCache);
 			source.__updateChildren (true);
 			
 			if (clipRect != null) {
@@ -848,6 +862,13 @@ class BitmapData implements IBitmapDrawable {
 		
 	}
 	
+	public function isBufferDirty (gl:GLRenderContext, alpha:Float, colorTransform:ColorTransform):Bool {
+		
+		return __buffer == null || __bufferContext != gl || __bufferAlpha != alpha || 
+				(__bufferColorTransform == null && colorTransform != null) || 
+				(__bufferColorTransform != null && !__bufferColorTransform.__equals (colorTransform));
+		
+	}
 	
 	public function getBuffer (gl:GLRenderContext, alpha:Float, colorTransform:ColorTransform):GLBuffer {
 		
@@ -894,6 +915,9 @@ class BitmapData implements IBitmapDrawable {
 			//[ colorTransform.redOffset / 255, colorTransform.greenOffset / 255, colorTransform.blueOffset / 255, colorTransform.alphaOffset / 255 ]
 			
 			__bufferData = new Float32Array (__bufferStride * 4);
+			
+			var width = this.width / __pixelRatio;
+			var height = this.height / __pixelRatio;
 			
 			__bufferData[0] = width;
 			__bufferData[1] = height;
@@ -1020,6 +1044,25 @@ class BitmapData implements IBitmapDrawable {
 	}
 	
 	
+	/**
+		Calculate texture coordinates for a quad representing a texture region
+		inside this BitmapData given normalized texture coordinates.
+	**/
+	public function __getTextureRegion(uvX:Float, uvY:Float, uvWidth:Float, uvHeight:Float, result:TextureRegionResult) {
+		result.u0 = uvX;
+		result.v0 = uvY;
+
+		result.u1 = uvWidth;
+		result.v1 = uvY;
+
+		result.u2 = uvWidth;
+		result.v2 = uvHeight;
+
+		result.u3 = uvX;
+		result.v3 = uvHeight;
+	}
+	
+	
 	public function getColorBoundsRect (mask:Int, color:Int, findColor:Bool = true):Rectangle {
 		
 		if (!readable) return new Rectangle (0, 0, width, height);
@@ -1089,6 +1132,7 @@ class BitmapData implements IBitmapDrawable {
 			
 			__textureContext = gl;
 			__texture = gl.createTexture ();
+			__ownsTexture = true;
 			
 			gl.bindTexture (gl.TEXTURE_2D, __texture);
 			gl.texParameteri (gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
@@ -1098,10 +1142,6 @@ class BitmapData implements IBitmapDrawable {
 			__textureVersion = -1;
 			
 		}
-		
-		#if (js && html5)
-		ImageCanvasUtil.sync (image, false);
-		#end
 		
 		if (image != null && image.version != __textureVersion) {
 			
@@ -1632,6 +1672,28 @@ class BitmapData implements IBitmapDrawable {
 	}
 	
 	
+	function __cleanup ():Void {
+
+		if (__vaoContext == null) return;
+		
+		if (__vao != null && __vaoContext.isVertexArray (__vao)) {
+			
+			__vaoContext.deleteVertexArray (__vao);
+			__vao = null;
+			
+		}
+		
+		if (__vaoMask != null && __vaoContext.isVertexArray (__vaoMask)) {
+			
+			__vaoContext.deleteVertexArray (__vaoMask);
+			__vaoMask = null;
+			
+		}
+		
+		__vaoContext = null;
+	}
+	
+	
 	private function __draw (source:IBitmapDrawable, matrix:Matrix = null, colorTransform:ColorTransform = null, blendMode:BlendMode = null, clipRect:Rectangle = null, smoothing:Bool = false):Void {
 		
 		if (matrix == null) {
@@ -1663,11 +1725,13 @@ class BitmapData implements IBitmapDrawable {
 				renderSession.clearRenderDirty = true;
 				renderSession.shaderManager = cast (null, GLRenderer).renderSession.shaderManager;
 				
-				var matrixCache = source.__worldTransform;
+				var matrixCache = Matrix.__pool.get ();
+				matrixCache.copyFrom (source.__worldTransform);
 				source.__updateTransforms (matrix);
 				source.__updateChildren (false);
 				source.__renderGL (renderer.renderSession);
 				source.__updateTransforms (matrixCache);
+				Matrix.__pool.release (matrixCache);
 				source.__updateChildren (true);
 				
 				gl.bindFramebuffer (gl.FRAMEBUFFER, null);
@@ -1708,18 +1772,14 @@ class BitmapData implements IBitmapDrawable {
 			renderSession.clearRenderDirty = true;
 			renderSession.context = cast buffer.__srcContext;
 			renderSession.allowSmoothing = smoothing;
+			renderSession.pixelRatio = __pixelRatio;
 			//renderSession.roundPixels = true;
 			renderSession.maskManager = new CanvasMaskManager (renderSession);
 			renderSession.blendModeManager = new CanvasBlendModeManager (renderSession);
 			
-			if (!smoothing) {
-				
-				untyped (buffer.__srcContext).mozImageSmoothingEnabled = false;
-				//untyped (buffer.__srcContext).webkitImageSmoothingEnabled = false;
-				untyped (buffer.__srcContext).msImageSmoothingEnabled = false;
-				untyped (buffer.__srcContext).imageSmoothingEnabled = false;
-				
-			}
+			buffer.__srcContext.save();
+			
+			CanvasSmoothing.setEnabled(buffer.__srcContext, smoothing);
 			
 			if (clipRect != null) {
 				
@@ -1727,7 +1787,8 @@ class BitmapData implements IBitmapDrawable {
 				
 			}
 			
-			var matrixCache = source.__worldTransform;
+			var matrixCache = Matrix.__pool.get ();
+			matrixCache.copyFrom (source.__worldTransform);
 			source.__updateTransforms (matrix);
 			source.__updateChildren (false);
 			
@@ -1746,16 +1807,10 @@ class BitmapData implements IBitmapDrawable {
 			source.__worldAlpha = cacheAlpha;
 			
 			source.__updateTransforms (matrixCache);
+			Matrix.__pool.release (matrixCache);
 			source.__updateChildren (true);
 			
-			if (!smoothing) {
-				
-				untyped (buffer.__srcContext).mozImageSmoothingEnabled = true;
-				//untyped (buffer.__srcContext).webkitImageSmoothingEnabled = true;
-				untyped (buffer.__srcContext).msImageSmoothingEnabled = true;
-				untyped (buffer.__srcContext).imageSmoothingEnabled = true;
-				
-			}
+			buffer.__srcContext.restore();
 			
 			if (clipRect != null) {
 				
@@ -1763,7 +1818,6 @@ class BitmapData implements IBitmapDrawable {
 				
 			}
 			
-			buffer.__srcContext.setTransform (1, 0, 0, 1, 0, 0);
 			buffer.__srcImageData = null;
 			buffer.data = null;
 			
@@ -1813,6 +1867,7 @@ class BitmapData implements IBitmapDrawable {
 			renderSession.clearRenderDirty = true;
 			renderSession.cairo = cairo;
 			renderSession.allowSmoothing = smoothing;
+			renderSession.pixelRatio = __pixelRatio;
 			//renderSession.roundPixels = true;
 			renderSession.maskManager = new CairoMaskManager (renderSession);
 			renderSession.blendModeManager = new CairoBlendModeManager (renderSession);
@@ -1823,7 +1878,8 @@ class BitmapData implements IBitmapDrawable {
 				
 			}
 			
-			var matrixCache = source.__worldTransform;
+			var matrixCache = Matrix.__pool.get ();
+			matrixCache.copyFrom (source.__worldTransform);
 			source.__updateTransforms (matrix);
 			source.__updateChildren (false);
 			
@@ -1844,6 +1900,7 @@ class BitmapData implements IBitmapDrawable {
 			source.__worldAlpha = cacheAlpha;
 			
 			source.__updateTransforms (matrixCache);
+			Matrix.__pool.release (matrixCache);
 			source.__updateChildren (true);
 			
 			if (clipRect != null) {
@@ -1977,6 +2034,8 @@ class BitmapData implements IBitmapDrawable {
 	}
 	
 	
+	private function __prepareImage() return image != null;
+
 	private function __loadFromFile (path:String):Future<BitmapData> {
 		
 		return Image.loadFromFile (path).then (function (image) {
@@ -2065,7 +2124,7 @@ class BitmapData implements IBitmapDrawable {
 		
 		if (renderSession.roundPixels) {
 			
-			context.setTransform (transform.a, transform.b, transform.c, transform.d, Std.int (transform.tx), Std.int (transform.ty));
+			context.setTransform (transform.a, transform.b, transform.c, transform.d, Math.round (transform.tx), Math.round (transform.ty));
 			
 		} else {
 			
@@ -2096,7 +2155,7 @@ class BitmapData implements IBitmapDrawable {
 		var shader = renderSession.shaderManager.defaultShader;
 		
 		shader.data.uImage0.input = this;
-		shader.data.uImage0.smoothing = renderSession.allowSmoothing && (renderSession.upscaled);
+		shader.data.uImage0.smoothing = renderSession.allowSmoothing && renderSession.forceSmoothing;
 		shader.data.uMatrix.value = renderer.getMatrix (__worldTransform);
 		
 		renderSession.shaderManager.setShader (shader);
@@ -2123,7 +2182,7 @@ class BitmapData implements IBitmapDrawable {
 		var shader = GLMaskManager.maskShader;
 		
 		shader.data.uImage0.input = this;
-		shader.data.uImage0.smoothing = renderSession.allowSmoothing && (renderSession.upscaled);
+		shader.data.uImage0.smoothing = renderSession.allowSmoothing && renderSession.forceSmoothing;
 		shader.data.uMatrix.value = renderer.getMatrix (__worldTransform);
 		
 		renderSession.shaderManager.setShader (shader);
@@ -2151,23 +2210,7 @@ class BitmapData implements IBitmapDrawable {
 	}
 	
 	
-	private function __sync ():Void {
-		
-		#if (js && html5)
-		ImageCanvasUtil.sync (image, false);
-		#end
-		
-	}
-	
-	
 	public function __updateChildren (transformOnly:Bool):Void {
-		
-		
-		
-	}
-	
-	
-	public function __updateMask (maskGraphics:Graphics):Void {
 		
 		
 		
@@ -2189,4 +2232,21 @@ class BitmapData implements IBitmapDrawable {
 	}
 	
 	
+}
+
+
+/**
+	Result structure for `BitmapData.__getTextureRegion`.
+	Can only be used for reading after calling `__getTextureRegion`.
+**/
+@:publicFields class TextureRegionResult {
+	var u0:Float;
+	var v0:Float;
+	var u1:Float;
+	var v1:Float;
+	var u2:Float;
+	var v2:Float;
+	var u3:Float;
+	var v3:Float;
+	function new() {}
 }

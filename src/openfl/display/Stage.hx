@@ -158,6 +158,7 @@ class Stage extends DisplayObjectContainer implements IModule {
 	private var __renderer:AbstractRenderer;
 	private var __rendering:Bool;
 	private var __rollOutStack:Array<DisplayObject>;
+	private var __mouseOutStack:Array<DisplayObject>;
 	private var __stack:Array<DisplayObject>;
 	private var __touchData:Map<Int, TouchData>;
 	private var __transparent:Bool;
@@ -306,6 +307,7 @@ class Stage extends DisplayObjectContainer implements IModule {
 		__clearBeforeRender = true;
 		__stack = [];
 		__rollOutStack = [];
+		__mouseOutStack = [];
 		__touchData = new Map<Int, TouchData>();
 		
 		if (Lib.current.stage == null) {
@@ -589,6 +591,8 @@ class Stage extends DisplayObjectContainer implements IModule {
 		
 		if (this.window == null || this.window != window) return;
 		
+		dispatchPendingMouseMove ();
+		
 		var type = switch (button) {
 			
 			case 1: MouseEvent.MIDDLE_MOUSE_DOWN;
@@ -601,15 +605,28 @@ class Stage extends DisplayObjectContainer implements IModule {
 		
 	}
 	
+	var hasPendingMouseMove = false;
+	var pendingMouseMoveX:Int;
+	var pendingMouseMoveY:Int;
 	
 	public function onMouseMove (window:Window, x:Float, y:Float):Void {
 		
 		if (this.window == null || this.window != window) return;
 		
-		__onMouse (MouseEvent.MOUSE_MOVE, Std.int (x * window.scale), Std.int (y * window.scale), 0);
+		hasPendingMouseMove = true;
+		pendingMouseMoveX = Std.int (x * window.scale);
+		pendingMouseMoveY = Std.int (y * window.scale);
 		
 	}
 	
+	function dispatchPendingMouseMove () {
+		
+		if (hasPendingMouseMove) {
+			__onMouse (MouseEvent.MOUSE_MOVE, pendingMouseMoveX, pendingMouseMoveY, 0);
+			hasPendingMouseMove = false;
+		}
+		
+	}
 	
 	public function onMouseMoveRelative (window:Window, x:Float, y:Float):Void {
 		
@@ -621,6 +638,8 @@ class Stage extends DisplayObjectContainer implements IModule {
 	public function onMouseUp (window:Window, x:Float, y:Float, button:Int):Void {
 		
 		if (this.window == null || this.window != window) return;
+		
+		dispatchPendingMouseMove ();
 		
 		var type = switch (button) {
 			
@@ -644,6 +663,8 @@ class Stage extends DisplayObjectContainer implements IModule {
 	public function onMouseWheel (window:Window, deltaX:Float, deltaY:Float):Void {
 		
 		if (this.window == null || this.window != window) return;
+		
+		dispatchPendingMouseMove ();
 		
 		__onMouseWheel (Std.int (deltaX * window.scale), Std.int (deltaY * window.scale));
 		
@@ -845,7 +866,7 @@ class Stage extends DisplayObjectContainer implements IModule {
 			
 			__wasFullscreen = true;
 			if (__displayState == NORMAL) __displayState = FULL_SCREEN_INTERACTIVE;
-			__dispatchEvent (new FullScreenEvent (FullScreenEvent.FULL_SCREEN, false, false, false, true));
+			__dispatchEvent (new FullScreenEvent (FullScreenEvent.FULL_SCREEN, false, false, true, true));
 			
 		}
 		
@@ -854,7 +875,7 @@ class Stage extends DisplayObjectContainer implements IModule {
 	
 	public function onWindowLeave (window:Window):Void {
 		
-		if (this.window == null || this.window != window) return;
+		if (this.window == null || this.window != window || MouseEvent.__buttonDown) return;
 		
 		__dispatchEvent (new Event (Event.MOUSE_LEAVE));
 		
@@ -889,7 +910,7 @@ class Stage extends DisplayObjectContainer implements IModule {
 			
 			__wasFullscreen = false;
 			__displayState = NORMAL;
-			__dispatchEvent (new FullScreenEvent (FullScreenEvent.FULL_SCREEN, false, false, true, true));
+			__dispatchEvent (new FullScreenEvent (FullScreenEvent.FULL_SCREEN, false, false, false, true));
 			
 		}
 		
@@ -948,7 +969,7 @@ class Stage extends DisplayObjectContainer implements IModule {
 		
 		__enterFrame (__deltaTime);
 		__deltaTime = 0;
-		__update (false, true);
+		__traverse ();
 		
 		if (__renderer != null #if !openfl_always_render && __renderDirty #end) {
 			
@@ -996,6 +1017,8 @@ class Stage extends DisplayObjectContainer implements IModule {
 	public function update (deltaTime:Int):Void {
 		
 		__deltaTime = deltaTime;
+		
+		dispatchPendingMouseMove ();
 		
 	}
 	
@@ -1285,6 +1308,8 @@ class Stage extends DisplayObjectContainer implements IModule {
 	
 	private function __onKey (type:String, keyCode:KeyCode, modifier:KeyModifier):Void {
 		
+		dispatchPendingMouseMove ();
+		
 		MouseEvent.__altKey = modifier.altKey;
 		MouseEvent.__commandKey = modifier.metaKey;
 		MouseEvent.__ctrlKey = modifier.ctrlKey;
@@ -1406,7 +1431,7 @@ class Stage extends DisplayObjectContainer implements IModule {
 					
 					MouseEvent.__buttonDown = false;
 					
-					if (__mouseX < 0 || __mouseY < 0) {
+					if (__mouseX < 0 || __mouseY < 0 || __mouseX > stageWidth || __mouseY > stageHeight) {
 						
 						__dispatchEvent (MouseEvent.__create (MouseEvent.RELEASE_OUTSIDE, 1, __mouseX, __mouseY, new Point (__mouseX, __mouseY), this));
 						
@@ -1545,7 +1570,7 @@ class Stage extends DisplayObjectContainer implements IModule {
 			if (__mouseOverTarget != null) {
 				
 				event = MouseEvent.__create (MouseEvent.MOUSE_OUT, button, __mouseX, __mouseY, __mouseOverTarget.__globalToLocal (targetPoint, localPoint), cast __mouseOverTarget);
-				__dispatchTarget (__mouseOverTarget, event);
+				__dispatchStack (event, __mouseOutStack);
 				
 			}
 			
@@ -1592,12 +1617,12 @@ class Stage extends DisplayObjectContainer implements IModule {
 			if (target != null) {
 				
 				event = MouseEvent.__create (MouseEvent.MOUSE_OVER, button, __mouseX, __mouseY, target.__globalToLocal (targetPoint, localPoint), cast target);
-				event.bubbles = true;
-				__dispatchTarget (target, event);
+				__dispatchStack (event, stack);
 				
 			}
 			
 			__mouseOverTarget = target;
+			__mouseOutStack = stack;
 			
 		}
 		
@@ -1855,8 +1880,8 @@ class Stage extends DisplayObjectContainer implements IModule {
 		var windowHeight = Std.int (window.height * window.scale);
 		
 		#if (js && html5)
-		__logicalWidth = windowWidth;
-		__logicalHeight = windowHeight;
+		__logicalWidth = window.width;
+		__logicalHeight = window.height;
 		#end
 		
 		__displayMatrix.identity ();
@@ -1957,13 +1982,13 @@ class Stage extends DisplayObjectContainer implements IModule {
 	}
 	
 	
-	public override function __update (transformOnly:Bool, updateChildren:Bool, maskGraphics:Graphics = null):Void {
+	public override function __update (transformOnly:Bool, updateChildren:Bool, ?resetUpdateDirty:Bool = false):Void {
 		
 		if (transformOnly) {
 			
 			if (__transformDirty) {
 				
-				super.__update (true, updateChildren, maskGraphics);
+				super.__update (true, updateChildren, resetUpdateDirty);
 				
 				if (updateChildren) {
 					
@@ -1978,7 +2003,7 @@ class Stage extends DisplayObjectContainer implements IModule {
 			
 			if (__transformDirty || __renderDirty) {
 				
-				super.__update (false, updateChildren, maskGraphics);
+				super.__update (false, updateChildren, resetUpdateDirty);
 				
 				if (updateChildren) {
 					
@@ -2000,7 +2025,7 @@ class Stage extends DisplayObjectContainer implements IModule {
 				// If we were dirty last time, we need at least one more
 				// update in order to clear "changed" properties
 				
-				super.__update (false, updateChildren, maskGraphics);
+				super.__update (false, updateChildren, resetUpdateDirty);
 				
 				if (updateChildren) {
 					

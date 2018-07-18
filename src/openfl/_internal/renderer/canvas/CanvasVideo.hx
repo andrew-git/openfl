@@ -28,23 +28,21 @@ class CanvasVideo {
 			var transform = video.__worldTransform;
 			var scrollRect = video.__scrollRect;
 			var smoothing = video.smoothing;
-			
+			var pixelRatio = renderSession.pixelRatio;
+			 
 			if (renderSession.roundPixels) {
 				
-				context.setTransform (transform.a, transform.b, transform.c, transform.d, Std.int (transform.tx), Std.int (transform.ty));
+				context.setTransform (transform.a * pixelRatio, transform.b, transform.c, transform.d * pixelRatio, Math.round (transform.tx * pixelRatio), Math.round (transform.ty * pixelRatio));
 				
 			} else {
 				
-				context.setTransform (transform.a, transform.b, transform.c, transform.d, transform.tx, transform.ty);
+				context.setTransform (transform.a * pixelRatio, transform.b, transform.c, transform.d * pixelRatio, transform.tx * pixelRatio, transform.ty * pixelRatio);
 				
 			}
 			
 			if (!smoothing) {
 				
-				untyped (context).mozImageSmoothingEnabled = false;
-				//untyped (context).webkitImageSmoothingEnabled = false;
-				untyped (context).msImageSmoothingEnabled = false;
-				untyped (context).imageSmoothingEnabled = false;
+				CanvasSmoothing.setEnabled(context, false);
 				
 			}
 			
@@ -60,10 +58,7 @@ class CanvasVideo {
 			
 			if (!smoothing) {
 				
-				untyped (context).mozImageSmoothingEnabled = true;
-				//untyped (context).webkitImageSmoothingEnabled = true;
-				untyped (context).msImageSmoothingEnabled = true;
-				untyped (context).imageSmoothingEnabled = true;
+				CanvasSmoothing.setEnabled(context, true);
 				
 			}
 			

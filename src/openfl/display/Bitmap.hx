@@ -29,7 +29,7 @@ class Bitmap extends DisplayObject implements IShaderDrawable {
 	
 	
 	public var bitmapData (get, set):BitmapData;
-	public var pixelSnapping:PixelSnapping;
+	public var pixelSnapping (get, set):PixelSnapping;
 	@:beta public var shader:Shader;
 	public var smoothing:Bool;
 	
@@ -55,17 +55,25 @@ class Bitmap extends DisplayObject implements IShaderDrawable {
 		super ();
 		
 		__bitmapData = bitmapData;
-		this.pixelSnapping = pixelSnapping;
+
+		if (pixelSnapping == null) pixelSnapping = PixelSnapping.AUTO;
+		__pixelSnapping = pixelSnapping;
+
 		this.smoothing = smoothing;
 		
-		if (pixelSnapping == null) {
+	}
+	
+	private override function __cleanup ():Void {
+		
+		super.__cleanup ();
+		
+		if (__bitmapData != null) {
 			
-			this.pixelSnapping = PixelSnapping.AUTO;
+			__bitmapData.__cleanup ();
 			
 		}
 		
 	}
-	
 	
 	private override function __enterFrame (deltaTime:Int):Void {
 		
@@ -103,7 +111,7 @@ class Bitmap extends DisplayObject implements IShaderDrawable {
 	}
 	
 	
-	private override function __hitTest (x:Float, y:Float, shapeFlag:Bool, stack:Array<DisplayObject>, interactiveOnly:Bool, hitObject:DisplayObject):Bool {
+	private override function __hitTest (x:Float, y:Float, shapeFlag:Bool, stack:Array<DisplayObject>, interactiveOnly:Bool, hitObject:DisplayObject, hitTestWhenMouseDisabled:Bool = false):Bool {
 		
 		if (!hitObject.visible || __isMask || __bitmapData == null) return false;
 		if (mask != null && !mask.__hitTestMask (x, y)) return false;
@@ -121,7 +129,7 @@ class Bitmap extends DisplayObject implements IShaderDrawable {
 				
 			}
 			
-			if (stack != null && !interactiveOnly) {
+			if (stack != null && !interactiveOnly && !hitTestWhenMouseDisabled) {
 				
 				stack.push (hitObject);
 				
@@ -269,37 +277,10 @@ class Bitmap extends DisplayObject implements IShaderDrawable {
 	
 	private override function __updateCacheBitmap (renderSession:RenderSession, force:Bool):Bool {
 		
-		if (filters == null) return false;
+		if (!__hasFilters () && renderSession.gl != null && __cacheBitmap == null) return false;
 		return super.__updateCacheBitmap (renderSession, force);
 		
 	}
-	
-	
-	public override function __updateMask (maskGraphics:Graphics):Void {
-		
-		if (__bitmapData == null) {
-			
-			return;
-			
-		}
-		
-		maskGraphics.__commands.overrideMatrix (this.__worldTransform);
-		maskGraphics.beginFill (0);
-		maskGraphics.drawRect (0, 0, __bitmapData.width, __bitmapData.height);
-		
-		if (maskGraphics.__bounds == null) {
-			
-			maskGraphics.__bounds = new Rectangle ();
-			
-		}
-		
-		__getBounds (maskGraphics.__bounds, @:privateAccess Matrix.__identity);
-		
-		super.__updateMask (maskGraphics);
-		
-	}
-	
-	
 	
 	
 	// Get & Set Methods
@@ -321,7 +302,7 @@ class Bitmap extends DisplayObject implements IShaderDrawable {
 		
 		__setRenderDirty ();
 		
-		if (__filters != null && __filters.length > 0) {
+		if (__hasFilters ()) {
 			
 			//__updateFilters = true;
 			

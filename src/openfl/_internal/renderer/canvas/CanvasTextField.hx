@@ -6,10 +6,10 @@ import openfl._internal.renderer.dom.DOMTextField;
 import openfl._internal.renderer.RenderSession;
 import openfl._internal.text.TextEngine;
 import openfl.display.BitmapData;
+import openfl.display.DisplayObject;
 import openfl.display.BitmapDataChannel;
 import openfl.display.Graphics;
 import openfl.events.Event;
-import openfl.filters.GlowFilter;
 import openfl.geom.Matrix;
 import openfl.geom.Rectangle;
 import openfl.text.TextField;
@@ -24,8 +24,10 @@ import js.Browser;
 import js.html.ImageData;
 #end
 
+@:access(openfl.display.BitmapData)
 @:access(openfl._internal.text.TextEngine)
 @:access(openfl.display.Graphics)
+@:access(openfl.display.DisplayObject)
 @:access(openfl.text.TextField)
 
 
@@ -38,13 +40,14 @@ class CanvasTextField {
 	#end
 	
 	
-	public static inline function render (textField:TextField, renderSession:RenderSession, transform:Matrix):Void {
+	public static function render (textField:TextField, renderSession:RenderSession, transform:Matrix):Void {
 		
 		#if (js && html5)
 		
 		var textEngine = textField.__textEngine;
 		var bounds = textEngine.bounds;
 		var graphics = textField.__graphics;
+		var pixelRatio = renderSession.pixelRatio;
 		
 		if (textField.__dirty) {
 			
@@ -67,6 +70,10 @@ class CanvasTextField {
 			var width = graphics.__width;
 			var height = graphics.__height;
 			
+			if (graphics.__bitmap != null) {
+				graphics.__bitmap.dispose ();
+			}
+			
 			if (((textEngine.text == null || textEngine.text == "") && !textEngine.background && !textEngine.border && !textEngine.__hasFocus && (textEngine.type != INPUT || !textEngine.selectable)) || ((textEngine.width <= 0 || textEngine.height <= 0) && textEngine.autoSize != TextFieldAutoSize.NONE)) {
 				
 				textField.__graphics.__canvas = null;
@@ -88,25 +95,17 @@ class CanvasTextField {
 				
 				var transform = graphics.__renderTransform;
 				
-				if (renderSession.renderType == DOM) {
+				graphics.__canvas.width = Std.int (width * pixelRatio);
+				graphics.__canvas.height = Std.int (height * pixelRatio);
+				
+				if (DisplayObject.__supportDOM && pixelRatio != 1) {
 					
-					var scale = CanvasRenderer.scale;
-					
-					graphics.__canvas.width = Std.int (width * scale);
-					graphics.__canvas.height = Std.int (height * scale);
 					graphics.__canvas.style.width = width + "px";
 					graphics.__canvas.style.height = height + "px";
 					
-					context.setTransform (transform.a * scale, transform.b * scale, transform.c * scale, transform.d * scale, transform.tx * scale, transform.ty * scale);
-					
-				} else {
-					
-					graphics.__canvas.width = width;
-					graphics.__canvas.height = height;
-					
-					context.setTransform (transform.a, transform.b, transform.c, transform.d, transform.tx, transform.ty);
-					
 				}
+				
+				context.setTransform (transform.a * pixelRatio, transform.b, transform.c, transform.d * pixelRatio, transform.tx * pixelRatio, transform.ty * pixelRatio);
 				
 				if (clearRect == null) {
 					
@@ -126,17 +125,11 @@ class CanvasTextField {
 					
 					if (!renderSession.allowSmoothing || (textEngine.antiAliasType == ADVANCED && textEngine.sharpness == 400)) {
 						
-						untyped (graphics.__context).mozImageSmoothingEnabled = false;
-						//untyped (graphics.__context).webkitImageSmoothingEnabled = false;
-						untyped (graphics.__context).msImageSmoothingEnabled = false;
-						untyped (graphics.__context).imageSmoothingEnabled = false;
+						CanvasSmoothing.setEnabled(graphics.__context, false);
 						
 					} else {
 						
-						untyped (graphics.__context).mozImageSmoothingEnabled = true;
-						//untyped (graphics.__context).webkitImageSmoothingEnabled = true;
-						untyped (graphics.__context).msImageSmoothingEnabled = true;
-						untyped (graphics.__context).imageSmoothingEnabled = true;
+						CanvasSmoothing.setEnabled(graphics.__context, true);
 						
 					}
 					
@@ -205,28 +198,6 @@ class CanvasTextField {
 						if (applyHack) {
 							
 							offsetY = group.format.size * 0.185;
-							
-						}
-						
-						if (textField.__filters != null && textField.__filters.length > 0) {
-							
-							// Hack, force outline
-							
-							if (Std.is (textField.__filters[0], GlowFilter)) {
-								
-								var glowFilter:GlowFilter = cast textField.__filters[0];
-								
-								var cacheAlpha = context.globalAlpha;
-								context.globalAlpha = cacheAlpha * glowFilter.alpha;
-								
-								context.strokeStyle = "#" + StringTools.hex (glowFilter.color & 0xFFFFFF, 6);
-								context.lineWidth = Math.max (glowFilter.blurX, glowFilter.blurY);
-								context.strokeText (text.substring (group.startIndex, group.endIndex), group.offsetX + scrollX, group.offsetY + offsetY + scrollY);
-								
-								context.strokeStyle = null;
-								context.globalAlpha = cacheAlpha;
-								
-							}
 							
 						}
 						
@@ -373,6 +344,7 @@ class CanvasTextField {
 				}
 				
 				graphics.__bitmap = BitmapData.fromCanvas (textField.__graphics.__canvas);
+				graphics.__bitmap.__pixelRatio = pixelRatio;
 				graphics.__visible = true;
 				textField.__dirty = false;
 				graphics.__dirty = false;

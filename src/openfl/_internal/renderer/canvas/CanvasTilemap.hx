@@ -38,14 +38,11 @@ class CanvasTilemap {
 		renderSession.maskManager.pushRect (rect, tilemap.__renderTransform);
 		
 		var transform = tilemap.__renderTransform;
-		var roundPixels = renderSession.roundPixels;
+		var roundPixels = renderSession.roundPixels || tilemap.__snapToPixel ();
 		
 		if (!renderSession.allowSmoothing || !tilemap.smoothing) {
 			
-			untyped (context).mozImageSmoothingEnabled = false;
-			//untyped (context).webkitImageSmoothingEnabled = false;
-			untyped (context).msImageSmoothingEnabled = false;
-			untyped (context).imageSmoothingEnabled = false;
+			CanvasSmoothing.setEnabled(context, false);
 			
 		}
 		
@@ -87,7 +84,7 @@ class CanvasTilemap {
 			}
 			
 			bitmapData = tileset.bitmapData;
-			if (bitmapData == null || !bitmapData.readable) continue;
+			if (bitmapData == null || !bitmapData.__prepareImage()) continue;
 			
 			if (bitmapData != cacheBitmapData) {
 				
@@ -106,14 +103,15 @@ class CanvasTilemap {
 			
 			tileTransform = tile.matrix;
 			tileTransform.concat (transform);
+			var pixelRatio = renderSession.pixelRatio;
 			
 			if (roundPixels) {
 				
-				context.setTransform (tileTransform.a, tileTransform.b, tileTransform.c, tileTransform.d, Std.int (tileTransform.tx), Std.int (tileTransform.ty));
+				context.setTransform (tileTransform.a * pixelRatio, tileTransform.b, tileTransform.c, tileTransform.d * pixelRatio, Math.round (tileTransform.tx * pixelRatio), Math.round (tileTransform.ty * pixelRatio));
 				
 			} else {
 				
-				context.setTransform (tileTransform.a, tileTransform.b, tileTransform.c, tileTransform.d, tileTransform.tx, tileTransform.ty);
+				context.setTransform (tileTransform.a * pixelRatio, tileTransform.b, tileTransform.c, tileTransform.d * pixelRatio, tileTransform.tx * pixelRatio, tileTransform.ty * pixelRatio);
 				
 			}
 			
@@ -123,10 +121,7 @@ class CanvasTilemap {
 		
 		if (!renderSession.allowSmoothing || !tilemap.smoothing) {
 			
-			untyped (context).mozImageSmoothingEnabled = true;
-			//untyped (context).webkitImageSmoothingEnabled = true;
-			untyped (context).msImageSmoothingEnabled = true;
-			untyped (context).imageSmoothingEnabled = true;
+			CanvasSmoothing.setEnabled(context, true);
 			
 		}
 		

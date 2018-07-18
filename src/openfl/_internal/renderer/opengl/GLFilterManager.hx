@@ -8,7 +8,6 @@ import openfl.display.BitmapData;
 import openfl.display.DisplayObject;
 import openfl.display.Shader;
 import openfl.filters.BitmapFilter;
-import openfl.filters.GlowFilter;
 import openfl.geom.Matrix;
 import openfl.text.TextField;
 import openfl.Vector;
@@ -58,14 +57,7 @@ class GLFilterManager extends AbstractFilterManager {
 		
 		// TODO: Support one-pass filters?
 		
-		if (object.__filters != null && object.__filters.length > 0) {
-			
-			if (Std.is (object.__filters[0], GlowFilter) && Std.is (object, TextField)) {
-				
-				// Hack, force outline
-				return renderSession.shaderManager.defaultShader;
-				
-			}
+		if (object.__hasFilters ()) {
 			
 			if (object.__filters.length == 1 && object.__filters[0].__numShaderPasses == 0) {
 				
@@ -93,14 +85,7 @@ class GLFilterManager extends AbstractFilterManager {
 		
 		// TEMPORARILY DISABLED
 		
-		if (object.__filters != null && object.__filters.length > 0) {
-			
-			if (Std.is (object.__filters[0], GlowFilter) && Std.is (object, TextField)) {
-				
-				// Hack, force outline
-				return;
-				
-			}
+		if (object.__hasFilters ()) {
 			
 			var numPasses:Int = 0;
 			
@@ -169,7 +154,7 @@ class GLFilterManager extends AbstractFilterManager {
 		if (target == null || shader == null) return;
 		
 		shader.data.uImage0.input = target;
-		shader.data.uImage0.smoothing = renderSession.allowSmoothing && (renderSession.upscaled);
+		shader.data.uImage0.smoothing = renderSession.allowSmoothing && renderSession.forceSmoothing;
 		shader.data.uMatrix.value = renderer.getMatrix (matrix);
 		
 		if (shader.data.uColorTransform != null) {
